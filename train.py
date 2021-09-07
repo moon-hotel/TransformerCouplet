@@ -75,6 +75,7 @@ def train_model(config):
                                  lr=0.,
                                  betas=(config.beta1, config.beta2), eps=config.epsilon)
     couplet_model.train()
+    max_test_acc = 0
     for epoch in range(config.epochs):
         losses = 0
         start_time = time.time()
@@ -114,8 +115,10 @@ def train_model(config):
         logger.info(msg)
         if (epoch + 1) % config.model_save_per_epoch == 0:
             acc = evaluate(config, test_iter, couplet_model, data_loader)
-            logger.info(f"Accuracy on test {acc:.3f}")
-            torch.save(couplet_model.state_dict(), model_save_path)
+            logger.info(f"Accuracy on test {acc:.3f}, max_acc {max_test_acc:.3f}")
+            if acc > max_test_acc:
+                max_test_acc = acc
+                torch.save(couplet_model.state_dict(), model_save_path)
 
 
 def evaluate(config, test_iter, model, data_loader):
