@@ -38,7 +38,7 @@ def couplet(model, src, data_loader, config):
     return "".join([vocab.itos[tok] for tok in tgt_tokens]).replace("<bos>", "").replace("<eos>", "")
 
 
-def do_couplet(src, config):
+def do_couplet(srcs, config):
     data_loader = LoadCoupletDataset(config.train_corpus_file_paths,
                                      batch_size=config.batch_size,
                                      tokenizer=my_tokenizer,
@@ -53,8 +53,11 @@ def do_couplet(src, config):
     couplet_model = couplet_model.to(config.device)
     loaded_paras = torch.load(config.model_save_dir + '/model.pkl')
     couplet_model.load_state_dict(loaded_paras)
-    r = couplet(couplet_model, src, data_loader, config)
-    return r
+    results = []
+    for src in srcs:
+        r = couplet(couplet_model, src, data_loader, config)
+        results.append(r)
+    return results
 
 
 if __name__ == '__main__':
@@ -67,9 +70,10 @@ if __name__ == '__main__':
             "家事、国事、天下事，事事关心",
             ""]
     config = Config()
-    for i, src in enumerate(srcs):
-        r = do_couplet(" ".join(src), config)
-        print(f"上联：{src}")
+    srcs = [" ".join(src) for src in srcs]
+    results = do_couplet(srcs, config)
+    for src, tgt, r in zip(srcs, tgts, results):
+        print(f"上联：{''.join(src.split())}")
         print(f" AI：{r}")
-        print(f"下联：{tgts[i]}")
+        print(f"下联：{tgts}")
         print("=======")
