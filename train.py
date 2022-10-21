@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from config.config import Config
 from model.CoupletModel import CoupletModel
 from utils.data_helpers import LoadCoupletDataset
@@ -109,6 +111,8 @@ def train_model(config):
             if (idx + 1) % config.train_info_per_batch == 0:
                 msg = f"Epoch: {epoch}, Batch[{idx}/{len(train_iter)}], Train loss :{loss.item():.3f}, Train acc: {acc:.3f}"
                 logger.info(msg)
+                config.writer.add_scalar('Training/Loss', loss.item, learning_rate.step)
+                config.writer.add_scalar('Training/Accuracy', acc, learning_rate.step)
         end_time = time.time()
         train_loss = losses / len(train_iter)
         msg = f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Epoch time = {(end_time - start_time):.3f}s"
@@ -118,7 +122,8 @@ def train_model(config):
             logger.info(f"Accuracy on test {acc:.3f}, max_acc {max_test_acc:.3f}")
             if acc > max_test_acc:
                 max_test_acc = acc
-                torch.save(couplet_model.state_dict(), model_save_path)
+                state_dict = deepcopy(couplet_model.state_dict())
+                torch.save(state_dict, model_save_path)
 
 
 def evaluate(config, test_iter, model, data_loader):

@@ -2,7 +2,7 @@ import os
 import torch
 from utils.log_helper import Logger
 import logging
-
+from torch.utils.tensorboard import SummaryWriter
 
 class Config():
     """
@@ -35,6 +35,7 @@ class Config():
         self.model_save_dir = os.path.join(self.project_dir, 'cache')
         self.train_info_per_batch = 30
         self.model_save_per_epoch = 2
+        self.writer = SummaryWriter("runs")
         if not os.path.exists(self.model_save_dir):
             os.makedirs(self.model_save_dir)
 

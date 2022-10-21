@@ -74,5 +74,5 @@ if __name__ == '__main__':
     for src, tgt, r in zip(srcs, tgts, results):
         print(f"上联：{''.join(src.split())}")
         print(f" AI：{r}")
-        print(f"下联：{tgts}")
+        print(f"下联：{tgt}")
         print("=======")
