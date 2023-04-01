@@ -111,7 +111,7 @@ def train_model(config):
             if (idx + 1) % config.train_info_per_batch == 0:
                 msg = f"Epoch: {epoch}, Batch[{idx}/{len(train_iter)}], Train loss :{loss.item():.3f}, Train acc: {acc:.3f}"
                 logger.info(msg)
-                config.writer.add_scalar('Training/Loss', loss.item, learning_rate.step)
+                config.writer.add_scalar('Training/Loss', loss.item(), learning_rate.step)
                 config.writer.add_scalar('Training/Accuracy', acc, learning_rate.step)
         end_time = time.time()
         train_loss = losses / len(train_iter)
