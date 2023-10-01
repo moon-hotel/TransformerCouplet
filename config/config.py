@@ -1,8 +1,9 @@
 import os
 import torch
-from utils.log_helper import Logger
-import logging
 from torch.utils.tensorboard import SummaryWriter
+import logging
+
+
 
 class Config():
     """
@@ -17,7 +18,7 @@ class Config():
                                         os.path.join(self.dataset_dir, 'train', 'out.txt')]  # 训练时解码器的输入
         self.test_corpus_file_paths = [os.path.join(self.dataset_dir, 'test', 'in.txt'),
                                        os.path.join(self.dataset_dir, 'test', 'out.txt')]
-        self.min_freq = 1  # 在构建词表的过程中滤掉词（字）频小于min_freq的词（字）
+        self.top_k = 9000
 
         #  模型相关配置
         self.batch_size = 512
@@ -30,16 +31,16 @@ class Config():
         self.beta1 = 0.9
         self.beta2 = 0.98
         self.epsilon = 10e-9
+        self.num_warmup_steps = 4000
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.epochs = 100
         self.model_save_dir = os.path.join(self.project_dir, 'cache')
+        self.model_save_path = os.path.join(self.model_save_dir, 'model.pkl')
         self.train_info_per_batch = 30
         self.model_save_per_epoch = 2
         self.writer = SummaryWriter("runs")
         if not os.path.exists(self.model_save_dir):
             os.makedirs(self.model_save_dir)
-
-        # 日志相关
-        self.logger = Logger(log_file_name='log_train',
-                             log_level=logging.DEBUG,
-                             log_dir=self.model_save_dir).get_log()
+        logging.info("### 将当前配置打印到日志文件中 ")
+        for key, value in self.__dict__.items():
+            logging.info(f"### {key} = {value}")

@@ -1,8 +1,10 @@
 import torch.nn as nn
-import torch
-from model.MyTransformer import MyTransformer
-from torch.nn import Transformer as MyTransformer
-from model.Embedding import PositionalEncoding, TokenEmbedding
+from .MyTransformer import MyTransformer
+from .Embedding import PositionalEncoding
+from .Embedding import TokenEmbedding
+
+
+# from torch.nn import Transformer as MyTransformer
 
 
 class CoupletModel(nn.Module):
@@ -20,6 +22,7 @@ class CoupletModel(nn.Module):
         self.pos_embedding = PositionalEncoding(d_model=d_model, dropout=dropout)
         self.token_embedding = TokenEmbedding(vocab_size, d_model)
         self.classification = nn.Linear(d_model, vocab_size)
+        self._reset_parameters()
 
     def forward(self, src=None, tgt=None, src_mask=None,
                 tgt_mask=None, memory_mask=None, src_key_padding_mask=None,
@@ -28,6 +31,7 @@ class CoupletModel(nn.Module):
 
         :param src: Encoder的输入 [src_len,batch_size]
         :param tgt: Decoder的输入 [tgt_len,batch_size]
+        :param tgt_mask: Decoder中的注意力掩码矩阵 [tgt_len,tgt_len]
         :param src_key_padding_mask: 用来Mask掉Encoder中不同序列的padding部分,[batch_size, src_len]
         :param tgt_key_padding_mask: 用来Mask掉Decoder中不同序列的padding部分 [batch_size, tgt_len]
         :param memory_key_padding_mask: 用来Mask掉Encoder输出的memory中不同序列的padding部分 [batch_size, src_len]
@@ -58,3 +62,8 @@ class CoupletModel(nn.Module):
         tgt_embed = self.pos_embedding(tgt_embed)  # [tgt_len, batch_size, embed_dim]
         outs = self.my_transformer.decoder(tgt_embed, memory=memory)  # [tgt_len,batch_size,embed_dim]
         return outs
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
