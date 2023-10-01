@@ -1,7 +1,7 @@
 import sys
 
 sys.path.append("../")
-from model.CoupletModel import CoupletModel
+from model import CoupletModel
 import torch
 
 if __name__ == '__main__':

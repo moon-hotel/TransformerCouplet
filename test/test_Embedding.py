@@ -1,7 +1,7 @@
 import sys
 
 sys.path.append('../')
-from model.Embedding import TokenEmbedding, PositionalEncoding
+from model import TokenEmbedding, PositionalEncoding
 import torch
 
 if __name__ == '__main__':

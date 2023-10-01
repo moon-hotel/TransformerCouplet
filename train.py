@@ -1,27 +1,23 @@
 from copy import deepcopy
-
-from config.config import Config
-from model.CoupletModel import CoupletModel
-from utils.data_helpers import LoadCoupletDataset
-from utils.data_helpers import my_tokenizer
+from config import Config
+from model import CoupletModel
+from utils import LoadCoupletDataset
 import torch
 import time
-import torch.nn as nn
+from torch.optim.lr_scheduler import LambdaLR
 import os
+import logging
 
 
-class CustomSchedule(nn.Module):
-    def __init__(self, d_model, warmup_steps=4000):
-        super(CustomSchedule, self).__init__()
-        self.d_model = torch.tensor(d_model, dtype=torch.float32)
-        self.warmup_steps = warmup_steps
-        self.step = 1.
+def get_customized_schedule_with_warmup(optimizer, num_warmup_steps=4000,
+                                        d_model=512, last_epoch=-1):
+    def lr_lambda(current_step):
+        current_step += 1
+        arg1 = current_step ** -0.5
+        arg2 = current_step * (num_warmup_steps ** -1.5)
+        return (d_model ** -0.5) * min(arg1, arg2)
 
-    def __call__(self):
-        arg1 = self.step ** -0.5
-        arg2 = self.step * (self.warmup_steps ** -1.5)
-        self.step += 1.
-        return (self.d_model ** -0.5) * min(arg1, arg2)
+    return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
 def accuracy(logits, y_true, PAD_IDX):
@@ -44,17 +40,15 @@ def accuracy(logits, y_true, PAD_IDX):
 
 
 def train_model(config):
-    logger = config.logger
-    logger.debug("############载入数据集############")
+    logging.info("############载入数据集############")
     data_loader = LoadCoupletDataset(config.train_corpus_file_paths,
                                      batch_size=config.batch_size,
-                                     tokenizer=my_tokenizer,
-                                     min_freq=config.min_freq)
-    logger.debug("############划分数据集############")
+                                     top_k=config.top_k)
+    logging.info("############划分数据集############")
     train_iter, test_iter = \
         data_loader.load_train_val_test_data(config.train_corpus_file_paths,
                                              config.test_corpus_file_paths)
-    logger.debug("############初始化模型############")
+    logging.info("############初始化模型############")
     couplet_model = CoupletModel(vocab_size=len(data_loader.vocab),
                                  d_model=config.d_model,
                                  nhead=config.num_head,
@@ -62,20 +56,15 @@ def train_model(config):
                                  num_decoder_layers=config.num_decoder_layers,
                                  dim_feedforward=config.dim_feedforward,
                                  dropout=config.dropout)
-    for p in couplet_model.parameters():
-        if p.dim() > 1:
-            nn.init.xavier_uniform_(p)
-    model_save_path = os.path.join(config.model_save_dir, 'model.pkl')
-    if os.path.exists(model_save_path):
-        loaded_paras = torch.load(model_save_path)
+    if os.path.exists(config.model_save_path):
+        loaded_paras = torch.load(config.model_save_path)
         couplet_model.load_state_dict(loaded_paras)
-        logger.debug("#### 成功载入已有模型，进行追加训练...")
+        logging.info("#### 成功载入已有模型，进行追加训练...")
     couplet_model = couplet_model.to(config.device)
-    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=data_loader.PAD_IDX)
-    learning_rate = CustomSchedule(config.d_model)
-    optimizer = torch.optim.Adam(couplet_model.parameters(),
-                                 lr=0.,
-                                 betas=(config.beta1, config.beta2), eps=config.epsilon)
+    loss_fn = torch.nn.CrossEntropyLoss(reduction='sum', ignore_index=data_loader.PAD_IDX)
+    optimizer = torch.optim.Adam(couplet_model.parameters(), lr=1.0, betas=(config.beta1, config.beta2),eps=config.epsilon)
+    scheduler = get_customized_schedule_with_warmup(optimizer, num_warmup_steps=config.num_warmup_steps,
+                                                    d_model=config.d_model)
     couplet_model.train()
     max_test_acc = 0
     for epoch in range(config.epochs):
@@ -99,31 +88,29 @@ def train_model(config):
             # logits 输出shape为[tgt_len,batch_size,tgt_vocab_size]
             optimizer.zero_grad()
             tgt_out = tgt[1:, :]  # 解码部分的真实值  shape: [tgt_len,batch_size]
-            loss = loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+            loss = loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1)) / src.shape[1]
             # [tgt_len*batch_size, tgt_vocab_size] with [tgt_len*batch_size, ]
             loss.backward()
-            lr = learning_rate()
-            for p in optimizer.param_groups:
-                p['lr'] = lr
             optimizer.step()
+            scheduler.step()
             losses += loss.item()
             acc, _, _ = accuracy(logits, tgt_out, data_loader.PAD_IDX)
             if (idx + 1) % config.train_info_per_batch == 0:
-                msg = f"Epoch: {epoch}, Batch[{idx}/{len(train_iter)}], Train loss :{loss.item():.3f}, Train acc: {acc:.3f}"
-                logger.info(msg)
-                config.writer.add_scalar('Training/Loss', loss.item(), learning_rate.step)
-                config.writer.add_scalar('Training/Accuracy', acc, learning_rate.step)
+                msg = f"Epoch: {epoch}, Batch[{idx + 1}/{len(train_iter)}], Train loss :{loss.item():.3f}, Train acc: {acc:.3f}"
+                logging.info(msg)
+                config.writer.add_scalar('Training/Loss', loss.item(), scheduler.last_epoch)
+                config.writer.add_scalar('Training/Accuracy', acc, scheduler.last_epoch)
         end_time = time.time()
         train_loss = losses / len(train_iter)
         msg = f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Epoch time = {(end_time - start_time):.3f}s"
-        logger.info(msg)
+        logging.info(msg)
         if (epoch + 1) % config.model_save_per_epoch == 0:
             acc = evaluate(config, test_iter, couplet_model, data_loader)
-            logger.info(f"Accuracy on test {acc:.3f}, max_acc {max_test_acc:.3f}")
+            logging.info(f"Accuracy on test {acc:.3f}, max_acc {max_test_acc:.3f}")
             if acc > max_test_acc:
                 max_test_acc = acc
                 state_dict = deepcopy(couplet_model.state_dict())
-                torch.save(state_dict, model_save_path)
+                torch.save(state_dict, config.model_save_path)
 
 
 def evaluate(config, test_iter, model, data_loader):
