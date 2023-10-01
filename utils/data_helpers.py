@@ -1,67 +1,158 @@
 from collections import Counter
-from torchtext.vocab import Vocab
 import torch
-from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
+import logging
+from .tools import contains_chinese
+from .tools import process_cache
 
 
-def my_tokenizer(s):
-    return s.split()
-
-
-def build_vocab(tokenizer, filepath, min_freq=1, specials=None):
+class Vocab(object):
     """
-    vocab = Vocab(counter, specials=specials)
-
+    构建词表
+    vocab = Vocab()
     print(vocab.itos)  # 得到一个列表，返回词表中的每一个词；
-    print(vocab.itos[2])  # 通过索引返回得到词表中对应的词；
+    print(vocab.itos[num])  # 通过索引返回得到词表中对应的词；
     print(vocab.stoi)  # 得到一个字典，返回词表中每个词的索引；
-    print(vocab.stoi['我'])  # 通过单词返回得到词表中对应的索引
+    print(vocab.stoi['[UNK]'])  # 通过单词返回得到词表中对应的索引
+    print(len(vocab))  # 返回词表长度
+    :param top_k:  取出现频率最高的前top_k个token
+    :param data: 为一个列表，每个元素为一句文本
+    :return:
     """
-    if specials is None:
-        specials = ['<unk>', '<pad>', '<bos>', '<eos>']
-    counter = Counter()
-    with open(filepath[0], encoding='utf8') as f:
-        for string_ in f:
-            counter.update(tokenizer(string_))
-    with open(filepath[1], encoding='utf8') as f:
-        for string_ in f:
-            counter.update(tokenizer(string_))
-    return Vocab(counter, specials=specials, min_freq=min_freq)
+    UNK = '<UNK>'  # 0
+    PAD = '<PAD>'  # 1
+    BOS = '<BOS>'  # 2
+    EOS = '<EOS>'  # 3
+
+    def __init__(self, top_k=2000, data=None, cut_words=False):
+        logging.info(f" ## 正在根据训练集构建词表……")
+        counter = Counter()
+        self.stoi = {Vocab.UNK: 0, Vocab.PAD: 1, Vocab.BOS: 2, Vocab.EOS: 3}
+        self.itos = [Vocab.UNK, Vocab.PAD, Vocab.BOS, Vocab.EOS]
+        for text in data:
+            token = tokenize(text, cut_words)
+            counter.update(token)  # 统计每个token出现的频率
+
+        top_k_words = counter.most_common(top_k - len(self.itos))
+        for i, word in enumerate(top_k_words):
+            self.stoi[word[0]] = i + 4  # 4表示已有了UNK、PAD、BOS和EOS
+            self.itos.append(word[0])
+        logging.info(f" ## 词表构建完毕，前100个词为: {list(self.stoi.items())[:100]}")
+
+    def __getitem__(self, token):
+        return self.stoi.get(token, self.stoi.get(Vocab.UNK))
+
+    def __len__(self):
+        return len(self.itos)
+
+
+def tokenize(text, cut_words=False):
+    """
+    tokenize方法
+    :param text: 上联：一夜春风去，怎么对下联？
+    :return:
+    words: 字粒度： ['上', '联', '：', '一', '夜', '春', '风', '去', '，', '怎', '么', '对', '下', '联', '？']
+    """
+    import jieba
+    if contains_chinese(text):  # 中文
+        if cut_words:  # 分词
+            text = jieba.cut(text)  # 词粒度
+        text = " ".join(text)  # 不分词则是字粒度
+    words = text.split()
+    return words
+
+
+def pad_sequence(sequences, batch_first=False, max_len=None, padding_value=0):
+    """
+    对一个List中的元素进行padding
+    Pad a list of variable length Tensors with ``padding_value``
+    a = torch.ones(25)
+    b = torch.ones(22)
+    c = torch.ones(15)
+    pad_sequence([a, b, c],max_len=None).size()
+    torch.Size([25, 3])
+        sequences:
+        batch_first: 是否把batch_size放到第一个维度
+        padding_value:
+        max_len :
+                当max_len = 50时，表示以某个固定长度对样本进行padding，多余的截掉；
+                当max_len=None是，表示以当前batch中最长样本的长度对其它进行padding；
+    Returns:
+    """
+    if max_len is None:
+        max_len = max([s.size(0) for s in sequences])
+    out_tensors = []
+    for tensor in sequences:
+        if tensor.size(0) < max_len:
+            padding_content = [padding_value] * (max_len - tensor.size(0))
+            tensor = torch.cat([tensor, torch.tensor(padding_content)], dim=0)
+        else:
+            tensor = tensor[:max_len]
+        out_tensors.append(tensor)
+    out_tensors = torch.stack(out_tensors, dim=1)
+    if batch_first:
+        return out_tensors.transpose(0, 1)
+    return out_tensors
 
 
 class LoadCoupletDataset():
-    def __init__(self, train_file_paths=None, tokenizer=None,
-                 batch_size=2, min_freq=1):
+    def __init__(self, train_file_paths=None, batch_size=2, top_k=5000):
         # 根据训练预料建立字典，由于都是中文，所以共用一个即可
-        self.tokenizer = tokenizer
-        self.vocab = build_vocab(self.tokenizer, filepath=train_file_paths, min_freq=min_freq)
-        self.specials = ['<unk>', '<pad>', '<bos>', '<eos>']
-        self.PAD_IDX = self.vocab['<pad>']
-        self.BOS_IDX = self.vocab['<bos>']
-        self.EOS_IDX = self.vocab['<eos>']
+        raw_data = self.load_raw_data(train_file_paths)
+        self.vocab = Vocab(top_k, raw_data[0] + raw_data[1], False)
+        self.PAD_IDX = self.vocab[self.vocab.PAD]
+        self.BOS_IDX = self.vocab[self.vocab.BOS]
+        self.EOS_IDX = self.vocab[self.vocab.EOS]
         self.batch_size = batch_size
+        self.top_k = top_k
 
-    def data_process(self, filepaths):
+    def load_raw_data(self, file_path=None):
+        """
+        载入原始的文本
+        :param file_path:
+        :return:
+        samples: ['上联：一夜春风去，怎么对下联？', '隋唐五代｜欧阳询《温彦博碑》，书于贞观十一年，是欧最晚的作品']
+        labels: ['1','1']
+        """
+        results = []
+        for i in range(2):
+            logging.info(f" ## 载入原始文本 {file_path[i]}")
+            tmp = []
+            with open(file_path[i], encoding="utf8") as f:
+                for line in f:
+                    line = line.strip()
+                    tmp.append(line)
+            results.append(tmp)
+        return results
+
+    @process_cache(["top_k"])
+    def data_process(self, filepaths, file_path=None):
         """
         将每一句话中的每一个词根据字典转换成索引的形式
         :param filepaths:
         :return:
         """
-        raw_in_iter = iter(open(filepaths[0], encoding="utf8"))
-        raw_out_iter = iter(open(filepaths[1], encoding="utf8"))
+        results = self.load_raw_data(filepaths)
         data = []
-        for (raw_in, raw_out) in zip(raw_in_iter, raw_out_iter):
+        for (raw_in, raw_out) in zip(results[0], results[1]):
+            logging.debug(f"原始上联: {raw_in}")
             in_tensor_ = torch.tensor([self.vocab[token] for token in
-                                       self.tokenizer(raw_in.rstrip("\n"))], dtype=torch.long)
+                                       tokenize(raw_in.rstrip("\n"))], dtype=torch.long)
+            if len(in_tensor_) < 6:
+                logging.debug(f"长度过短，忽略: {raw_in}<=>{raw_out}")
+                continue
+            logging.debug(f"原始上联 token id: {in_tensor_}")
+            logging.debug(f"原始下联: {raw_out}")
             out_tensor_ = torch.tensor([self.vocab[token] for token in
-                                        self.tokenizer(raw_out.rstrip("\n"))], dtype=torch.long)
+                                        tokenize(raw_out.rstrip("\n"))], dtype=torch.long)
+            logging.debug(f"原始下联 token id: {out_tensor_}")
+
             data.append((in_tensor_, out_tensor_))
         return data
 
     def load_train_val_test_data(self, train_file_paths, test_file_paths):
-        train_data = self.data_process(train_file_paths)
-        test_data = self.data_process(test_file_paths)
+        train_data = self.data_process(train_file_paths, file_path=train_file_paths[0])
+        test_data = self.data_process(test_file_paths, file_path=test_file_paths[0])
         train_iter = DataLoader(train_data, batch_size=self.batch_size,
                                 shuffle=True, collate_fn=self.generate_batch)
         test_iter = DataLoader(test_data, batch_size=self.batch_size,
@@ -100,7 +191,7 @@ class LoadCoupletDataset():
         tgt_mask = self.generate_square_subsequent_mask(tgt_seq_len, device)  # [tgt_len,tgt_len]
         # Decoder的注意力Mask输入，用于掩盖当前position之后的position，所以这里是一个对称矩阵
 
-        src_mask = torch.zeros((src_seq_len, src_seq_len), device=device).type(torch.bool)
+        src_mask = torch.zeros((src_seq_len, src_seq_len), device=device)
         # Encoder的注意力Mask输入，这部分其实对于Encoder来说是没有用的，所以这里全是0
 
         src_padding_mask = (src == self.PAD_IDX).transpose(0, 1)
@@ -108,3 +199,9 @@ class LoadCoupletDataset():
         tgt_padding_mask = (tgt == self.PAD_IDX).transpose(0, 1)
         # 用于mask掉Decoder的Token序列中的padding部分,batch_size, tgt_len
         return src_mask, tgt_mask, src_padding_mask, tgt_padding_mask
+
+    def make_inference_sample(self, text):
+        tokens = [self.vocab.stoi[token] for token in tokenize(text)]
+        num_tokens = len(tokens)
+        src = (torch.LongTensor(tokens).reshape(num_tokens, 1))
+        return src
